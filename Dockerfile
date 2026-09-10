@@ -1,11 +1,11 @@
 FROM python:3.10-slim
 
-# Install system dependencies including mdbtools and ODBC support
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     unixodbc \
     unixodbc-dev \
     mdbtools \
-    libmdbodbc \
+    odbc-mdbtools \
     && rm -rf /var/lib/apt/lists/*
 
 # Configure ODBC driver for MDBTools
