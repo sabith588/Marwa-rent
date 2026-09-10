@@ -18,7 +18,6 @@ ACCDB_PATH = os.path.abspath("database.accdb")
 SQLITE_PATH = os.path.abspath("database.sqlite")
 
 def convert_accdb_to_sqlite():
-    """Converts uploaded .accdb file into a native SQLite database."""
     if not os.path.exists(ACCDB_PATH):
         return False
     
@@ -26,30 +25,27 @@ def convert_accdb_to_sqlite():
         os.remove(SQLITE_PATH)
 
     try:
-        # Get table list using mdb-tables
         tables_out = subprocess.check_output(["mdb-tables", "-1", ACCDB_PATH]).decode("utf-8")
         tables = [t.strip() for t in tables_out.splitlines() if t.strip()]
 
         conn = sqlite3.connect(SQLITE_PATH)
         for table in tables:
-            # Dump table schema and data into SQLite
-            schema_cmd = f"mdb-schema '{ACCDB_PATH}' sqlite | grep -A 100 'CREATE TABLE `{table}`'"
-            csv_cmd = f"mdb-export -D '%Y-%m-%d %H:%M:%S' '{ACCDB_PATH}' '{table}'"
-            
-            # Export data using mdb-export
             csv_data = subprocess.check_output(["mdb-export", ACCDB_PATH, table]).decode("utf-8")
+            lines = csv_data.splitlines()
+            if not lines:
+                continue
+
+            headers = [h.strip('"') for h in lines[0].split(",")]
+            cols = ", ".join([f"\"{h}\" TEXT" for h in headers])
             
-            # Convert schema & insert into SQLite
             cursor = conn.cursor()
-            headers = csv_data.splitlines()[0].split(",")
-            cols = ", ".join([f"'{h.strip('\"')}' TEXT" for h in headers])
-            cursor.execute(f"CREATE TABLE IF NOT EXISTS '{table}' ({cols})")
+            cursor.execute(f"CREATE TABLE IF NOT EXISTS \"{table}\" ({cols})")
             
-            for line in csv_data.splitlines()[1:]:
-                vals = line.split(",")
+            for line in lines[1:]:
+                vals = [v.strip('"') for v in line.split(",")]
                 if len(vals) == len(headers):
                     placeholders = ", ".join(["?"] * len(vals))
-                    cursor.execute(f"INSERT INTO '{table}' VALUES ({placeholders})", [v.strip('"') for v in vals])
+                    cursor.execute(f"INSERT INTO \"{table}\" VALUES ({placeholders})", vals)
         
         conn.commit()
         conn.close()
@@ -75,20 +71,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     doc = update.message.document
     if doc.file_name.endswith(".accdb") or doc.file_name.endswith(".mdb"):
-        await update.message.reply_text("⏳ Uploading and processing database...")
+        await update.message.reply_text("⏳ Processing database...")
         file = await context.bot.get_file(doc.file_id)
         await file.download_to_drive(ACCDB_PATH)
         
-        # Convert file
         success = convert_accdb_to_sqlite()
         if success:
             await update.message.reply_text(
-                f"✅ Database `{doc.file_name}` uploaded and indexed successfully!",
+                f"✅ Database `{doc.file_name}` uploaded successfully!",
                 reply_markup=main_menu_keyboard(),
                 parse_mode="Markdown"
             )
         else:
-            await update.message.reply_text("⚠️ File uploaded, but table conversion encountered issues.")
+            await update.message.reply_text("⚠️ Uploaded, but failed to extract tables.")
     else:
         await update.message.reply_text("⚠️ Please upload a valid `.accdb` file.")
 
@@ -98,7 +93,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if query.data == "menu_tables":
         if not os.path.exists(SQLITE_PATH):
-            await query.edit_message_text("⚠️ No database converted yet. Please upload an `.accdb` file first!", reply_markup=main_menu_keyboard())
+            await query.edit_message_text("⚠️ Please upload an `.accdb` file first!", reply_markup=main_menu_keyboard())
             return
 
         try:
@@ -123,20 +118,22 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_document(
                 document=open(target, "rb"),
                 filename=os.path.basename(target),
-                caption="📤 Here is your database file."
+                caption="📤 Here is your current database file."
             )
         else:
-            await query.edit_message_text(text="No file found to export.", reply_markup=main_menu_keyboard())
+            await query.edit_message_text(text="No file found.", reply_markup=main_menu_keyboard())
 
 def main():
-    token = ("8994211914:AAHaX3KByPR-cnOxVA72RUEGSNVGXYzr244)
+    token = ("8994211914:AAHaX3KByPR-cnOxVA72RUEGSNVGXYzr244")
+    if not token:
+        raise ValueError("BOT_TOKEN environment variable is missing!")
+        
     app = Application.builder().token(token).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_click))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
 
-    print("Bot starting polling...")
     app.run_polling()
 
 if __name__ == "__main__":
